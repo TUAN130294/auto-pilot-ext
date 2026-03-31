@@ -1,0 +1,103 @@
+{
+  "name": "auto-pilot",
+  "displayName": "Auto-Pilot",
+  "description": "Auto-accept WAITING steps and quick-swap Google accounts in Antigravity IDE — by Claudible.io Team",
+  "version": "1.3.0",
+  "publisher": "autopilot",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "auto-pilot",
+          "title": "Auto-Pilot",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "auto-pilot": [
+        {
+          "type": "webview",
+          "id": "autoPilot.mainPanel",
+          "name": "Auto-Pilot"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "auto-pilot.toggleAutoAccept",
+        "title": "Auto-Pilot: Toggle Auto-Accept"
+      },
+      {
+        "command": "auto-pilot.swapProfile",
+        "title": "Auto-Pilot: Swap Account"
+      },
+      {
+        "command": "auto-pilot.addAccount",
+        "title": "Auto-Pilot: Add Account",
+        "icon": "$(add)"
+      },
+      {
+        "command": "auto-pilot.saveAccount",
+        "title": "Auto-Pilot: Save Current Account"
+      },
+      {
+        "command": "auto-pilot.deleteProfile",
+        "title": "Auto-Pilot: Delete Account"
+      },
+      {
+        "command": "auto-pilot.showStatus",
+        "title": "Auto-Pilot: Show LS Status"
+      },
+      {
+        "command": "auto-pilot.refreshProfiles",
+        "title": "Auto-Pilot: Refresh Accounts",
+        "icon": "$(refresh)"
+      }
+    ],
+    "configuration": {
+      "title": "Auto-Pilot",
+      "properties": {
+        "auto-pilot.autoAcceptEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable auto-accept for WAITING steps"
+        },
+        "auto-pilot.pollIntervalMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Polling interval in ms for auto-accept"
+        },
+        "auto-pilot.profilesDir": {
+          "type": "string",
+          "default": "",
+          "description": "Custom profiles directory (default: %APPDATA%/AntigravityDeck/profiles)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "npm run build -- --watch",
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}
