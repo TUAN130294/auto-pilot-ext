@@ -142,3 +142,21 @@ export async function getSubscriptionStatus(inst: LsInstance): Promise<{ user?: 
 export async function getUserStatus(inst: LsInstance): Promise<{ userStatus?: { email?: string; name?: string; userTier?: { name?: string }; planStatus?: { planInfo?: { planName?: string } } } }> {
     return await makeRequest(inst, 'GetUserStatus', {}) as any;
 }
+
+/**
+ * Send a "Continue" message to a finished cascade to resume AI work.
+ * Uses AddCascadeTurn to inject a new user turn into the existing cascade.
+ */
+export async function sendContinueMessage(inst: LsInstance, cascadeId: string, workspaceId?: string): Promise<boolean> {
+    const body: Record<string, unknown> = {
+        cascadeId,
+        newUserTurnParams: {
+            userMessage: 'Continue',
+        },
+    };
+    if (workspaceId) {
+        body.workspaceId = workspaceId;
+    }
+    const result = await fireAndForget(inst, 'AddCascadeTurn', body);
+    return result.ok;
+}

@@ -1,12 +1,13 @@
 // === Auto-Accept Engine — ported from Antigravity-Deck auto-accept.js ===
 import * as vscode from 'vscode';
-import { LsInstance, TrajectoryStep, getAllTrajectories, getTrajectorySteps, sendInteraction } from './ls-api';
+import { LsInstance, TrajectoryStep, getAllTrajectories, getTrajectorySteps, sendInteraction, sendContinueMessage } from './ls-api';
 import { detectLsInstances } from './detector';
 import { detectDanger, DangerResult } from './danger-detector';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const DEBOUNCE_TTL = 15000;
+const CONTINUE_COOLDOWN = 10000; // Minimum ms between auto-continues for the same cascade
 
 // Antigravity LS API startIndex workaround:
 // JSON API may ignore startIndex and return from 0.
@@ -26,8 +27,15 @@ export interface AcceptEvent {
     commandText?: string;  // the raw command for log display
 }
 
+export interface ContinueEvent {
+    cascadeId: string;
+    success: boolean;
+    ts: number;
+}
+
 export class AutoAcceptEngine {
     private enabled = false;
+    private autoContinueEnabled = false;
     private timer: ReturnType<typeof setInterval> | null = null;
     private debounceSet = new Map<string, number>();
     private statusBar: vscode.StatusBarItem;
@@ -35,8 +43,15 @@ export class AutoAcceptEngine {
     private instances: LsInstance[] = [];
     private isRunning = false;
     private acceptedCount = 0;
+    private continueCount = 0;
+    // Track cascade states between polls: cascadeId → last known status
+    private prevCascadeStates = new Map<string, string>();
+    // Cooldown: cascadeId → timestamp of last auto-continue sent
+    private continueCooldowns = new Map<string, number>();
     private _onAcceptEvent = new vscode.EventEmitter<AcceptEvent>();
     readonly onAcceptEvent = this._onAcceptEvent.event;
+    private _onContinueEvent = new vscode.EventEmitter<ContinueEvent>();
+    readonly onContinueEvent = this._onContinueEvent.event;
 
     constructor(log: vscode.OutputChannel) {
         this.log = log;
@@ -48,9 +63,13 @@ export class AutoAcceptEngine {
 
     get isEnabled(): boolean { return this.enabled; }
 
+    get isContinueEnabled(): boolean { return this.autoContinueEnabled; }
+
     getInstances(): LsInstance[] { return this.instances; }
 
     getAcceptedCount(): number { return this.acceptedCount; }
+
+    getContinueCount(): number { return this.continueCount; }
 
     toggle(): void {
         this.enabled = !this.enabled;
@@ -63,6 +82,18 @@ export class AutoAcceptEngine {
     setEnabled(val: boolean): void {
         this.enabled = val;
         if (this.enabled) { this.start(); } else { this.stop(); }
+        this.updateStatusBar();
+    }
+
+    toggleContinue(): void {
+        this.autoContinueEnabled = !this.autoContinueEnabled;
+        vscode.workspace.getConfiguration('auto-pilot').update('autoContinueEnabled', this.autoContinueEnabled, vscode.ConfigurationTarget.Global);
+        this.updateStatusBar();
+        vscode.window.showInformationMessage(`Auto-Pilot: Auto-Continue ${this.autoContinueEnabled ? 'ENABLED ✅' : 'DISABLED ❌'}`);
+    }
+
+    setContinueEnabled(val: boolean): void {
+        this.autoContinueEnabled = val;
         this.updateStatusBar();
     }
 
@@ -83,16 +114,22 @@ export class AutoAcceptEngine {
         this.stop();
         this.statusBar.dispose();
         this._onAcceptEvent.dispose();
+        this._onContinueEvent.dispose();
     }
 
     private updateStatusBar(): void {
         const connected = this.instances.length > 0;
-        if (this.enabled) {
-            this.statusBar.text = connected ? '$(check) Auto-Accept ON' : '$(warning) Auto-Accept ON (no LS)';
+        const parts: string[] = [];
+        if (this.enabled) { parts.push('Accept'); }
+        if (this.autoContinueEnabled) { parts.push('Continue'); }
+
+        if (parts.length > 0) {
+            const label = parts.join('+');
+            this.statusBar.text = connected ? `$(check) Auto: ${label}` : `$(warning) Auto: ${label} (no LS)`;
         } else {
-            this.statusBar.text = '$(x) Auto-Accept OFF';
+            this.statusBar.text = '$(x) Auto-Pilot OFF';
         }
-        this.statusBar.tooltip = `Auto-Pilot: ${this.enabled ? 'ON' : 'OFF'} | ${this.instances.length} LS | ${this.acceptedCount} accepted`;
+        this.statusBar.tooltip = `Auto-Pilot: Accept=${this.enabled ? 'ON' : 'OFF'} Continue=${this.autoContinueEnabled ? 'ON' : 'OFF'} | ${this.instances.length} LS | ${this.acceptedCount} accepted | ${this.continueCount} continued`;
     }
 
     private isDuplicate(key: string): boolean {
@@ -110,7 +147,7 @@ export class AutoAcceptEngine {
     }
 
     private async poll(): Promise<void> {
-        if (!this.enabled || this.isRunning) { return; }
+        if ((!this.enabled && !this.autoContinueEnabled) || this.isRunning) { return; }
         this.isRunning = true;
 
         try {
@@ -119,42 +156,99 @@ export class AutoAcceptEngine {
             this.updateStatusBar();
             if (this.instances.length === 0) { return; }
 
+            // Track current cascade states for auto-continue detection
+            const currentStates = new Map<string, { status: string; inst: LsInstance }>();
+
             // Poll EACH LS instance independently (same as Deck)
             for (const inst of this.instances) {
                 try {
                     const trajectories = await getAllTrajectories(inst);
                     for (const [cascadeId, info] of Object.entries(trajectories)) {
-                        if (info.status !== 'CASCADE_RUN_STATUS_RUNNING' &&
-                            info.status !== 'CASCADE_RUN_STATUS_WAITING_FOR_USER') { continue; }
+                        // Track state for auto-continue
+                        currentStates.set(`${inst.port}:${cascadeId}`, { status: info.status, inst });
 
-                        const stepCount = info.stepCount || 0;
-                        if (stepCount === 0) { continue; }
+                        // --- Auto-Accept: only process RUNNING or WAITING cascades ---
+                        if (this.enabled &&
+                            (info.status === 'CASCADE_RUN_STATUS_RUNNING' ||
+                             info.status === 'CASCADE_RUN_STATUS_WAITING_FOR_USER')) {
 
-                        const trajectoryId = info.trajectoryId;
-                        const from = Math.max(0, stepCount - 5);
+                            const stepCount = info.stepCount || 0;
+                            if (stepCount === 0) { continue; }
 
-                        try {
-                            const steps = await getTrajectorySteps(inst, cascadeId, from, stepCount);
+                            const trajectoryId = info.trajectoryId;
+                            const from = Math.max(0, stepCount - 5);
 
-                            // CRITICAL: Antigravity LS API startIndex workaround
-                            const expectedRange = stepCount - from;
-                            const apiStartedAt = detectApiStartIndex(steps.length, expectedRange, from);
+                            try {
+                                const steps = await getTrajectorySteps(inst, cascadeId, from, stepCount);
 
-                            // Search from end (most recent step first)
-                            for (let i = steps.length - 1; i >= 0; i--) {
-                                const realIdx = apiStartedAt + i;
-                                if (realIdx < from) { continue; } // skip steps outside requested range
+                                // CRITICAL: Antigravity LS API startIndex workaround
+                                const expectedRange = stepCount - from;
+                                const apiStartedAt = detectApiStartIndex(steps.length, expectedRange, from);
 
-                                const step = steps[i];
-                                if (step.status === 'CORTEX_STEP_STATUS_WAITING' || step.status === 9) {
-                                    await this.acceptStep(inst, cascadeId, trajectoryId, realIdx, step);
-                                    break; // Only accept latest WAITING step per cascade
+                                // Search from end (most recent step first)
+                                for (let i = steps.length - 1; i >= 0; i--) {
+                                    const realIdx = apiStartedAt + i;
+                                    if (realIdx < from) { continue; } // skip steps outside requested range
+
+                                    const step = steps[i];
+                                    if (step.status === 'CORTEX_STEP_STATUS_WAITING' || step.status === 9) {
+                                        await this.acceptStep(inst, cascadeId, trajectoryId, realIdx, step);
+                                        break; // Only accept latest WAITING step per cascade
+                                    }
                                 }
-                            }
-                        } catch { /* skip cascade */ }
+                            } catch { /* skip cascade */ }
+                        }
                     }
                 } catch { /* skip instance */ }
             }
+
+            // --- Auto-Continue: detect cascades that just transitioned to FINISHED ---
+            if (this.autoContinueEnabled) {
+                const now = Date.now();
+                for (const [key, { status, inst }] of currentStates) {
+                    const prevStatus = this.prevCascadeStates.get(key);
+                    const cascadeId = key.split(':').slice(1).join(':'); // port:cascadeId → cascadeId
+
+                    // Detect transition: was RUNNING/WAITING → now FINISHED/COMPLETE
+                    const wasActive = prevStatus === 'CASCADE_RUN_STATUS_RUNNING' ||
+                                      prevStatus === 'CASCADE_RUN_STATUS_WAITING_FOR_USER';
+                    const isFinished = status === 'CASCADE_RUN_STATUS_FINISHED' ||
+                                       status === 'CASCADE_RUN_STATUS_COMPLETE' ||
+                                       status === 'CASCADE_RUN_STATUS_COMPLETED';
+
+                    if (wasActive && isFinished) {
+                        // Check cooldown
+                        const lastContinue = this.continueCooldowns.get(key) || 0;
+                        if (now - lastContinue < CONTINUE_COOLDOWN) {
+                            this.log.appendLine(`[AutoContinue] Cooldown active for ${cascadeId.substring(0, 8)}, skipping`);
+                            continue;
+                        }
+
+                        this.log.appendLine(`[AutoContinue] >>> Cascade ${cascadeId.substring(0, 8)} finished, sending "Continue"...`);
+                        this.continueCooldowns.set(key, now);
+
+                        const ok = await sendContinueMessage(inst, cascadeId, inst.workspaceId);
+                        if (ok) {
+                            this.continueCount++;
+                            this.log.appendLine(`[AutoContinue] +++ Sent "Continue" to ${cascadeId.substring(0, 8)}`);
+                        } else {
+                            this.log.appendLine(`[AutoContinue] --- Failed to send "Continue" to ${cascadeId.substring(0, 8)}`);
+                            this.continueCooldowns.delete(key); // Allow retry
+                        }
+                        this._onContinueEvent.fire({ cascadeId, success: ok, ts: now });
+                    }
+                }
+
+                // Clean up old cooldowns (older than 60s)
+                for (const [k, ts] of this.continueCooldowns) {
+                    if (now - ts > 60000) { this.continueCooldowns.delete(k); }
+                }
+            }
+
+            // Update previous states for next poll cycle
+            this.prevCascadeStates = new Map(
+                Array.from(currentStates.entries()).map(([k, v]) => [k, v.status])
+            );
         } finally {
             this.isRunning = false;
         }

@@ -26,6 +26,8 @@ export function activate(context: vscode.ExtensionContext) {
     autoAcceptEngine = new AutoAcceptEngine(log);
     const initialEnabled = vscode.workspace.getConfiguration('auto-pilot').get<boolean>('autoAcceptEnabled') || false;
     autoAcceptEngine.setEnabled(initialEnabled);
+    const initialContinue = vscode.workspace.getConfiguration('auto-pilot').get<boolean>('autoContinueEnabled') || false;
+    autoAcceptEngine.setContinueEnabled(initialContinue);
 
     // Watch config changes
     context.subscriptions.push(
@@ -33,6 +35,11 @@ export function activate(context: vscode.ExtensionContext) {
             if (e.affectsConfiguration('auto-pilot.autoAcceptEnabled')) {
                 const val = vscode.workspace.getConfiguration('auto-pilot').get<boolean>('autoAcceptEnabled') || false;
                 autoAcceptEngine?.setEnabled(val);
+                sidebarProvider?.refresh();
+            }
+            if (e.affectsConfiguration('auto-pilot.autoContinueEnabled')) {
+                const val = vscode.workspace.getConfiguration('auto-pilot').get<boolean>('autoContinueEnabled') || false;
+                autoAcceptEngine?.setContinueEnabled(val);
                 sidebarProvider?.refresh();
             }
             if (e.affectsConfiguration('auto-pilot.pollIntervalMs')) {
@@ -61,6 +68,13 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('auto-pilot.toggleAutoAccept', () => {
             autoAcceptEngine?.toggle();
+            sidebarProvider?.refresh();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('auto-pilot.toggleAutoContinue', () => {
+            autoAcceptEngine?.toggleContinue();
             sidebarProvider?.refresh();
         })
     );

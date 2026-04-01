@@ -2,7 +2,7 @@
   "name": "auto-pilot",
   "displayName": "Auto-Pilot",
   "description": "Auto-accept WAITING steps and quick-swap Google accounts in Antigravity IDE — by Claudible.io Team",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "autopilot",
   "license": "MIT",
   "engines": {
@@ -57,6 +57,10 @@
         "title": "Auto-Pilot: Delete Account"
       },
       {
+        "command": "auto-pilot.toggleAutoContinue",
+        "title": "Auto-Pilot: Toggle Auto-Continue"
+      },
+      {
         "command": "auto-pilot.showStatus",
         "title": "Auto-Pilot: Show LS Status"
       },
@@ -73,6 +77,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable auto-accept for WAITING steps"
+        },
+        "auto-pilot.autoContinueEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-send 'Continue' when AI stops due to token output limit"
         },
         "auto-pilot.pollIntervalMs": {
           "type": "number",

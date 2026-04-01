@@ -11,7 +11,7 @@ import {
     autoOnboard,
     ProfileEntry,
 } from './profile-manager';
-import { AutoAcceptEngine, AcceptEvent } from './auto-accept';
+import { AutoAcceptEngine, AcceptEvent, ContinueEvent } from './auto-accept';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'autoPilot.mainPanel';
@@ -20,6 +20,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private _engine: AutoAcceptEngine;
     private _extensionUri: vscode.Uri;
     private _eventSub?: vscode.Disposable;
+    private _continueSub?: vscode.Disposable;
 
     constructor(extensionUri: vscode.Uri, log: vscode.OutputChannel, engine: AutoAcceptEngine) {
         this._extensionUri = extensionUri;
@@ -29,6 +30,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         // Forward accept events to webview
         this._eventSub = this._engine.onAcceptEvent((evt: AcceptEvent) => {
             this._view?.webview.postMessage({ type: 'acceptEvent', data: evt });
+        });
+
+        // Forward continue events to webview
+        this._continueSub = this._engine.onContinueEvent((evt: ContinueEvent) => {
+            this._view?.webview.postMessage({ type: 'continueEvent', data: evt });
         });
     }
 
@@ -62,6 +68,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             switch (msg.command) {
                 case 'toggleAutoAccept':
                     this._engine.toggle();
+                    this.refresh();
+                    break;
+                case 'toggleAutoContinue':
+                    this._engine.toggleContinue();
                     this.refresh();
                     break;
                 case 'refresh':
@@ -207,10 +217,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private _getState() {
         return {
             autoAcceptEnabled: this._engine.isEnabled,
+            autoContinueEnabled: this._engine.isContinueEnabled,
             lsCount: this._engine.getInstances().length,
             profiles: listProfiles(),
             activeProfile: getActiveProfile(),
             acceptedCount: this._engine.getAcceptedCount(),
+            continueCount: this._engine.getContinueCount(),
         };
     }
 
@@ -379,6 +391,31 @@ body{font-family:var(--vscode-font-family,'Segoe UI',sans-serif);font-size:13px;
     </div>
   </div>
 
+  <!-- Auto-Continue -->
+  <div class="sec">
+    <div class="sec-hdr">
+      <span class="sec-title">🔄 Auto-Continue</span>
+    </div>
+    <div class="aa-card">
+      <div class="aa-row">
+        <div class="aa-label">
+          <span class="aa-dot ${s.autoContinueEnabled ? 'on' : 'off'}"></span>
+          <span id="acText">${s.autoContinueEnabled ? 'Enabled' : 'Disabled'}</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="acToggle" ${s.autoContinueEnabled ? 'checked' : ''}>
+          <span class="toggle-sl"></span>
+        </label>
+      </div>
+      <div class="aa-status" id="acStatus" style="font-size:10px;margin-top:6px;color:var(--muted)">
+        Tự động gửi "Continue" khi AI bị ngắt do token limit
+      </div>
+      <div class="aa-stats">
+        <div class="stat"><div class="stat-val" id="continueCount" style="color:var(--purple)">${s.continueCount}</div><div class="stat-lbl">Continued</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Activity Log -->
   <div class="sec">
     <div class="sec-hdr">
@@ -506,6 +543,7 @@ function cancelAwait() {
 }
 
 document.getElementById('aaToggle')?.addEventListener('change', () => send('toggleAutoAccept'));
+document.getElementById('acToggle')?.addEventListener('change', () => send('toggleAutoContinue'));
 
 // --- Activity Log with auto-scroll ---
 const MAX_LOG = 50;
@@ -566,6 +604,15 @@ window.addEventListener('message', e => {
     if (lc) lc.textContent = d.lsCount;
     const ac = document.getElementById('acceptCount');
     if (ac) ac.textContent = d.acceptedCount;
+    // Auto-Continue stats
+    const acDot = document.querySelector('.sec:nth-child(2) .aa-dot');
+    if (acDot) acDot.className = 'aa-dot ' + (d.autoContinueEnabled ? 'on' : 'off');
+    const acText = document.getElementById('acText');
+    if (acText) acText.textContent = d.autoContinueEnabled ? 'Enabled' : 'Disabled';
+    const acT = document.getElementById('acToggle');
+    if (acT) acT.checked = d.autoContinueEnabled;
+    const cc = document.getElementById('continueCount');
+    if (cc) cc.textContent = d.continueCount;
   }
   if (m.type === 'status') {
     const t = document.getElementById('toast');
@@ -581,6 +628,9 @@ window.addEventListener('message', e => {
   }
   if (m.type === 'acceptEvent') {
     addLogEntry(m.data);
+  }
+  if (m.type === 'continueEvent') {
+    addLogEntry({ stepType: 'AUTO_CONTINUE', stepIndex: 0, success: m.data.success, ts: m.data.ts, commandText: 'Sent "Continue"', cascadeId: m.data.cascadeId });
   }
   if (m.type === 'awaitingLogin') {
     previousProfile = m.previousProfile;
