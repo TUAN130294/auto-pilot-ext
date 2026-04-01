@@ -427,95 +427,8 @@ body{font-family:var(--vscode-font-family,'Segoe UI',sans-serif);font-size:13px;
     </div>
   </div>
 
-  <!-- Profile Swap -->
-  <div class="sec">
-    <div class="sec-hdr">
-      <span class="sec-title">👤 Profile Swap</span>
-      <div style="display:flex;gap:4px">
-        <button class="btn btn-swap" onclick="send('refresh')">🔄</button>
-      </div>
-    </div>
-
-    <div id="toast" class="toast"></div>
-    <div id="swapBanner" class="swap-banner"><div class="spinner"></div><span style="font-size:11px;color:var(--amber);font-weight:500">Swapping account... IDE will restart (~10s)</span></div>
-
-    ${s.profiles.length === 0 ? `
-    <div class="empty" id="emptyState">
-      <div class="empty-icon">👤</div>
-      <div>No profiles saved yet</div>
-      <div class="empty-sub">Save your current IDE account to enable swapping between Google accounts.</div>
-    </div>
-    ` : ''}
-
-    ${activeP ? `
-    <!-- Active Profile -->
-    <div class="active-card">
-      <div class="active-row">
-        <div class="avatar active">${(activeP.meta?.email || activeP.name)[0].toUpperCase()}</div>
-        <div class="pinfo">
-          <div class="pname">
-            ${activeP.meta?.userName || activeP.name}
-            <span class="badge badge-active">ACTIVE</span>
-            ${activeP.meta?.tier ? `<span class="badge badge-tier">${activeP.meta.tier}</span>` : ''}
-            ${activeP.meta?.plan ? `<span class="badge badge-plan">${activeP.meta.plan} Plan</span>` : ''}
-          </div>
-          <div class="pemail">${activeP.meta?.email || ''}</div>
-        </div>
-      </div>
-    </div>
-    ` : ''}
-
-    ${!s.activeProfile && s.profiles.length > 0 ? `
-    <!-- No active — detected new account -->
-    <div class="await-box" id="newAcctBox">
-      <p>🔑 New account detected! Save it as a profile:</p>
-      <div class="await-row">
-        <input id="newNameInput" placeholder="Profile name (e.g. work, personal...)" />
-        <button class="btn btn-primary btn-swap" onclick="saveNewFromDetect()">Save</button>
-      </div>
-    </div>
-    ` : ''}
-
-    <!-- Other Profiles -->
-    <div id="otherProfiles">
-    ${otherPs.map((p: ProfileEntry) => {
-            const init = (p.meta?.email || p.name)[0].toUpperCase();
-            return `
-      <div class="other-card">
-        <div class="other-left">
-          <div class="avatar other">${init}</div>
-          <div class="pinfo">
-            <div class="pname">
-              ${p.meta?.userName || p.name}
-              ${p.meta?.tier ? `<span class="badge badge-tier">${p.meta.tier}</span>` : ''}
-              ${p.meta?.plan ? `<span class="badge badge-plan">${p.meta.plan}</span>` : ''}
-            </div>
-            <div class="pemail">${p.meta?.email || ''}</div>
-          </div>
-        </div>
-        <div class="other-actions">
-          <button class="btn btn-swap" onclick="send('swapProfile','${p.name}')">↔ Swap</button>
-          <button class="btn btn-swap btn-danger" onclick="send('deleteProfile','${p.name}')">🗑</button>
-        </div>
-      </div>`;
-        }).join('')}
-    </div>
-
-    <!-- Awaiting Login (hidden by default) -->
-    <div class="await-box" id="awaitBox" style="display:none">
-      <p>🔑 Log into your new Google account in the IDE, then save:</p>
-      <div class="await-row">
-        <input id="awaitNameInput" placeholder="Profile name (e.g. work, personal...)" />
-        <button class="btn btn-primary btn-swap" onclick="saveAwait()">Save</button>
-        <button class="btn btn-swap" onclick="cancelAwait()">Cancel</button>
-      </div>
-    </div>
-
-    <div class="btn-row">
-      <button class="btn btn-primary" onclick="send('saveAccount')">💾 Save Current</button>
-      <button class="btn" onclick="send('addAccount')">➕ Add Account</button>
-    </div>
-  </div>
+  <!-- Profile Swap (hidden — feature not ready yet) -->
+  <div id="toast" class="toast"></div>
 </div>
 
 <div class="footer">
@@ -529,17 +442,6 @@ let previousProfile = null;
 
 function send(cmd, name) {
   vscode.postMessage({ command: cmd, profileName: name, previousProfile });
-}
-function saveNewFromDetect() {
-  const n = document.getElementById('newNameInput')?.value?.trim();
-  if (n) send('saveAccount', n);
-}
-function saveAwait() {
-  const n = document.getElementById('awaitNameInput')?.value?.trim();
-  if (n) { send('saveAccount', n); document.getElementById('awaitBox').style.display = 'none'; }
-}
-function cancelAwait() {
-  send('cancelAdd', previousProfile);
 }
 
 document.getElementById('aaToggle')?.addEventListener('change', () => send('toggleAutoAccept'));
@@ -622,25 +524,14 @@ window.addEventListener('message', e => {
       if (m.statusType) setTimeout(() => { t.className = 'toast'; }, 5000);
     }
   }
-  if (m.type === 'swapping') {
-    const b = document.getElementById('swapBanner');
-    if (b) b.className = 'swap-banner' + (m.active ? ' show' : '');
-  }
   if (m.type === 'acceptEvent') {
     addLogEntry(m.data);
   }
   if (m.type === 'continueEvent') {
     addLogEntry({ stepType: 'AUTO_CONTINUE', stepIndex: 0, success: m.data.success, ts: m.data.ts, commandText: 'Sent "Continue"', cascadeId: m.data.cascadeId });
   }
-  if (m.type === 'awaitingLogin') {
-    previousProfile = m.previousProfile;
-    const box = document.getElementById('awaitBox');
-    if (box) box.style.display = m.previousProfile ? 'block' : 'none';
-  }
 });
 
-// Auto-onboard: no profiles yet OR no active profile (after add-account relaunch)
-${(s.profiles.length === 0 || !s.activeProfile) ? "setTimeout(() => send('autoOnboard'), 1500);" : ''}
 </script>
 </body>
 </html>`;
